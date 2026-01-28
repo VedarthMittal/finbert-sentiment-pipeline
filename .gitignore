@@ -138,7 +138,12 @@ models/
 data/
 *.csv
 *.json
-*.txt
+
+# Allow requirements.txt
+!requirements.txt
+
+# Exclude other text files in data directories
+data/**/*.txt
 
 # macOS
 .DS_Store
