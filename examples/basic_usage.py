@@ -56,7 +56,10 @@ def main():
     for i, (text, result) in enumerate(zip(texts, results), 1):
         if 'error' in result:
             print(f"{i}. Text: '{text}'")
-            print(f"   Error: {result['error']}\n")
+            print(f"   Error: {result['error']}")
+            if 'text_index' in result:
+                print(f"   (Error at index {result['text_index']})")
+            print()
         else:
             print(f"{i}. Text: '{text}'")
             print(f"   Sentiment: {result['sentiment']} ({result['confidence']:.2%})\n")

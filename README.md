@@ -35,11 +35,11 @@ pip install -r requirements.txt
 
 ## Git Setup Instructions
 
-If you're setting up this repository for the first time from a local directory, follow these steps:
+If you're setting up this repository for the first time from an **existing local directory** (not cloning from GitHub), follow these steps to link your local repository to GitHub:
 
 ### On Windows:
 ```cmd
-cd "C:\Users\mitta\Desktop\Applied AI\Individual Assignment"
+cd "path\to\your\project\directory"
 git remote add origin https://github.com/[USERNAME]/finbert-sentiment-pipeline.git
 git branch -M main
 git push -u origin main
@@ -53,7 +53,10 @@ git branch -M main
 git push -u origin main
 ```
 
-**Note:** Replace `[USERNAME]` with your actual GitHub username.
+**Note:** 
+- Replace `[USERNAME]` with your actual GitHub username.
+- Replace `path\to\your\project\directory` or `/path/to/your/project/directory` with your actual project path.
+- These commands are for linking an existing local repository. If you're starting fresh, use the clone command shown in the Installation section instead.
 
 ## Usage
 
@@ -74,6 +77,7 @@ print(result)
 ```
 finbert-sentiment-pipeline/
 ├── README.md
+├── LICENSE
 ├── requirements.txt
 ├── .gitignore
 ├── finbert_pipeline.py
@@ -87,6 +91,7 @@ finbert-sentiment-pipeline/
 - torch
 - numpy
 - pandas
+- scipy
 
 ## Contributing
 

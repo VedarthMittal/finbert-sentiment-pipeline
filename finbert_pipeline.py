@@ -103,12 +103,17 @@ class FinBERTSentimentPipeline:
             raise ValueError("Input must be a non-empty list of texts")
         
         results = []
-        for text in texts:
+        for idx, text in enumerate(texts):
             try:
                 result = self.analyze(text)
                 results.append(result)
             except Exception as e:
-                results.append({'error': str(e)})
+                # Include text index for debugging
+                results.append({
+                    'error': str(e),
+                    'text_index': idx,
+                    'text_preview': text[:50] + '...' if len(text) > 50 else text
+                })
         
         return results
 
