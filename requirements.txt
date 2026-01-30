@@ -1,0 +1,12 @@
+pandas
+numpy
+scikit-learn
+transformers
+torch
+networkx
+tqdm
+matplotlib
+seaborn
+nltk
+python-dotenv
+openai
