@@ -71,6 +71,8 @@ python -c "import nltk; nltk.download('punkt')"
 
 # Configure Environment
 echo "OPENAI_API_KEY=your_key_here" > .env
+```
+
 ---
 ## 5. Pipeline Execution
 
