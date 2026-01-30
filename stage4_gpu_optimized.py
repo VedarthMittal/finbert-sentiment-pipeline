@@ -1,19 +1,4 @@
-"""
-Financial Sentiment Analysis: FinBERT's 512-Token Information Gap
-Stage 4: Sentiment Inference & Methodological Validation
-
-Master's Data Science - University of Amsterdam
-Project: Extractive Summarization for Financial Sentiment Preservation
-
-Purpose: Validate that extractive summaries preserve sentiment vs. sliding window baseline
-Two Pipelines:
-  1. EXPERIMENTAL: FinBERT on 18,755 extractive summaries (~430 tokens each)
-  2. BASELINE: FinBERT on first 1,000 raw transcripts via sliding window (~7,349 tokens each)
-
-Comparison Metrics: Pearson correlation, label agreement, inference speedup
-Model: yiyanghkust/finbert-tone (FinBERT fine-tuned on financial sentiment)
-GPU Optimization: Batch inference with torch.no_grad() to save memory
-"""
+# FinBERT sentiment analysis: compare extractive summaries vs sliding window baseline
 
 import pandas as pd
 import numpy as np

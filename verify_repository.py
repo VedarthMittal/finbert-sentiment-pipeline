@@ -1,190 +1,131 @@
 """
-Repository Integrity Verification Script
-
-Run this BEFORE pushing to GitHub to ensure:
-1. All paths are relative (no hardcoded absolute paths)
-2. Required directories exist
-3. No sensitive data is tracked
-4. Dependencies are installable
+Stage 5: Ground Truth Generation (Robust Version)
+Fixes the 'unhashable type' list error and matches your specific file names.
 """
 
+import os
+import json
+import time
 import sys
-import subprocess
+import pandas as pd
+import numpy as np
 from pathlib import Path
-import re
+from tqdm import tqdm
+from dotenv import load_dotenv
+from openai import OpenAI, RateLimitError, APIConnectionError, APIError
 
-print("=" * 80)
-print("REPOSITORY INTEGRITY CHECK")
-print("=" * 80)
+load_dotenv()
 
-# Test 1: Verify all Python scripts use relative paths
-print("\n[Test 1] Checking for hardcoded absolute paths...")
-py_files = list(Path(".").glob("*.py"))
-absolute_path_pattern = re.compile(r'[C-Z]:\\|/Users/|/home/')
+# --- CONFIGURATION ---
+INPUT_S3 = Path("stage3_output/extractive_summaries.pkl")
+INPUT_S4 = Path("stage4_output/final_sentiment_results.pkl")
+OUTPUT_DIR = Path("outputs")
+API_KEY = os.getenv("OPENAI_API_KEY")
 
-issues = []
-for py_file in py_files:
-    if py_file.name == "verify_repository.py":
-        continue
-    content = py_file.read_text(encoding='utf-8')
-    if absolute_path_pattern.search(content):
-        issues.append(f"  ❌ {py_file.name}: Contains absolute path")
+RANDOM_SEED = 42
+SAMPLE_SIZE = 100
+MAX_RETRIES = 3
 
-if issues:
-    for issue in issues:
-        print(issue)
-    print("  ⚠️  FIX: Replace with Path('relative/path')")
-else:
-    print("  ✅ All paths are relative")
-
-# Test 2: Verify required directories
-print("\n[Test 2] Checking directory structure...")
-required_dirs = ["data", "outputs"]
-for dir_name in required_dirs:
-    dir_path = Path(dir_name)
-    if dir_path.exists():
-        print(f"  ✅ {dir_name}/ exists")
-    else:
-        print(f"  ⚠️  {dir_name}/ missing (will be created on first run)")
-
-# Test 3: Verify .gitignore effectiveness
-print("\n[Test 3] Checking .gitignore coverage...")
-try:
-    result = subprocess.run(
-        ["git", "ls-files"],
-        capture_output=True,
-        text=True,
-        check=True
-    )
-    tracked_files = result.stdout.strip().split('\n')
-    
-    sensitive_patterns = ['.pkl', '.csv', '.env', '__pycache__', 'data/', 'outputs/']
-    sensitive_tracked = []
-    
-    for file in tracked_files:
-        for pattern in sensitive_patterns:
-            if pattern in file:
-                sensitive_tracked.append(file)
-    
-    if sensitive_tracked:
-        print("  ❌ Sensitive files tracked:")
-        for file in sensitive_tracked:
-            print(f"     - {file}")
-        print("  ⚠️  FIX: Run 'git rm --cached <file>' and verify .gitignore")
-    else:
-        print("  ✅ No sensitive files tracked")
-        
-except subprocess.CalledProcessError:
-    print("  ⚠️  Not a git repository (run 'git init' first)")
-
-# Test 4: Verify required files exist
-print("\n[Test 4] Checking essential repository files...")
-required_files = [
-    "README.md",
-    "requirements.txt",
-    ".gitignore",
-    "eda_information_gap.py",
-    "preprocessing_stage2.py",
-    "stage3_budget_aware_summarization.py",
-    "stage4_gpu_optimized.py",
-    "stage5_ground_truth_llm.py",
-    "stage6_evaluation_metrics.py"
-]
-
-missing_files = []
-for file in required_files:
-    if Path(file).exists():
-        print(f"  ✅ {file}")
-    else:
-        missing_files.append(file)
-        print(f"  ❌ {file} MISSING")
-
-if missing_files:
-    print(f"\n  ⚠️  {len(missing_files)} required files missing!")
+if not API_KEY:
+    print("❌ Error: OPENAI_API_KEY not found. Add it to your .env file.")
     sys.exit(1)
 
-# Test 5: Verify Python syntax
-print("\n[Test 5] Checking Python syntax...")
-for py_file in py_files:
-    if py_file.name == "verify_repository.py":
-        continue
-    try:
-        compile(py_file.read_text(encoding='utf-8'), py_file.name, 'exec')
-        print(f"  ✅ {py_file.name}: Valid syntax")
-    except SyntaxError as e:
-        print(f"  ❌ {py_file.name}: SyntaxError at line {e.lineno}")
-        issues.append(f"Syntax error in {py_file.name}")
+class GroundTruthEvaluator:
+    def __init__(self):
+        self.client = OpenAI(api_key=API_KEY)
+        self.model = "gpt-4o"
+        self.system_prompt = (
+            "You are a Senior Equity Analyst. Analyze the following earnings call "
+            "transcript summary and provide a sentiment label: POSITIVE, NEGATIVE, or NEUTRAL. "
+            "Return JSON: {'label': 'STR', 'rationale': 'STR'}"
+        )
 
-# Test 6: Verify imports can be resolved (basic check)
-print("\n[Test 6] Checking critical imports...")
-critical_imports = [
-    ("pandas", "pd"),
-    ("numpy", "np"),
-    ("transformers", "AutoTokenizer"),
-    ("sklearn", "TfidfVectorizer"),
-    ("nltk", "sent_tokenize")
-]
+    def load_and_align_data(self) -> pd.DataFrame:
+        """Loads files and cleans 'unhashable' list columns for merging."""
+        if not (INPUT_S3.exists() and INPUT_S4.exists()):
+            raise FileNotFoundError(f"Missing: {INPUT_S3} or {INPUT_S4}")
+            
+        s3 = pd.read_pickle(INPUT_S3)
+        s4 = pd.read_pickle(INPUT_S4)
 
-missing_packages = []
-for package, module in critical_imports:
-    try:
-        if package == "sklearn":
-            import sklearn
-        elif package == "transformers":
-            import transformers
-        elif package == "pandas":
-            import pandas
-        elif package == "numpy":
-            import numpy
-        elif package == "nltk":
-            import nltk
-        print(f"  ✅ {package}")
-    except ImportError:
-        missing_packages.append(package)
-        print(f"  ⚠️  {package} not installed (run: pip install {package})")
+        def sanitize_key(df, col):
+            """Extracts first item if value is a list, then converts to string."""
+            # This fixes the 'unhashable type: list' error
+            df[col] = df[col].apply(lambda x: x[0] if isinstance(x, list) else x)
+            df[col] = df[col].astype(str).str.strip()
+            return df
 
-if missing_packages:
-    print(f"\n  ℹ️  {len(missing_packages)} packages missing - install via:")
-    print("     pip install -r requirements.txt")
-
-# Test 7: Check repository size
-print("\n[Test 7] Checking repository size...")
-try:
-    result = subprocess.run(
-        ["git", "count-objects", "-vH"],
-        capture_output=True,
-        text=True,
-        check=True
-    )
-    size_line = [line for line in result.stdout.split('\n') if 'size:' in line][0]
-    size = size_line.split(':')[1].strip()
-    
-    print(f"  📊 Repository size: {size}")
-    
-    # Extract numeric value
-    size_kb = float(size.split()[0])
-    if size_kb > 1000:  # 1 MB threshold
-        print("  ⚠️  Repository exceeds 1 MB - verify no large files committed")
-    else:
-        print("  ✅ Size is appropriate for code-only repository")
+        print("Sanitizing join keys (ticker/date)...")
+        s3 = sanitize_key(s3, 'ticker')
+        s3 = sanitize_key(s3, 'date')
+        s4 = sanitize_key(s4, 'ticker')
+        s4 = sanitize_key(s4, 'date')
         
-except (subprocess.CalledProcessError, IndexError):
-    print("  ⚠️  Could not determine repository size")
+        # Merge only necessary columns to prevent memory bloat
+        return pd.merge(
+            s4[['ticker', 'date', 'summary_label', 'baseline_label']], 
+            s3[['ticker', 'date', 'extractive_summary']], 
+            on=['ticker', 'date'], 
+            how='inner'
+        )
 
-# Final Summary
-print("\n" + "=" * 80)
-if issues:
-    print("❌ VERIFICATION FAILED")
-    print(f"   {len(issues)} issues found. Fix before pushing to GitHub.")
-    for issue in issues:
-        print(f"   - {issue}")
-    sys.exit(1)
-else:
-    print("✅ ALL CHECKS PASSED")
-    print("   Repository is ready for GitHub deployment!")
-    print("\n   Next steps:")
-    print("   1. Create GitHub repository at https://github.com/new")
-    print("   2. Run: git remote add origin https://github.com/[username]/[repo].git")
-    print("   3. Run: git branch -M main")
-    print("   4. Run: git push -u origin main")
-print("=" * 80)
+    def call_llm(self, text: str):
+        """Robust API call with exponential backoff for rate limits."""
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "system", "content": self.system_prompt},
+                              {"role": "user", "content": f"Analyze: {text[:6000]}"}],
+                    response_format={"type": "json_object"},
+                    temperature=0
+                )
+                res = json.loads(response.choices[0].message.content)
+                label = res.get('label', 'NEUTRAL').upper()
+                if label not in ["POSITIVE", "NEGATIVE", "NEUTRAL"]:
+                    label = "NEUTRAL"
+                return label, res.get('rationale', ''), True
+            except RateLimitError:
+                time.sleep(60 * (attempt + 1))
+            except Exception as e:
+                if attempt == MAX_RETRIES - 1: return "NEUTRAL", str(e), False
+                time.sleep(5)
+        return "NEUTRAL", "Timeout", False
+
+    def run(self):
+        OUTPUT_DIR.mkdir(exist_ok=True)
+        print("Starting Stage 5...")
+        
+        df = self.load_and_align_data()
+        
+        # Stratified sampling (Agreement vs Disagreement)
+        np.random.seed(RANDOM_SEED)
+        dis = df[df["summary_label"] != df["baseline_label"]]
+        agr = df[df["summary_label"] == df["baseline_label"]]
+        n_dis = min(SAMPLE_SIZE // 2, len(dis))
+        n_agr = SAMPLE_SIZE - n_dis
+        
+        sampled = pd.concat([
+            dis.sample(n=n_dis, random_state=RANDOM_SEED),
+            agr.sample(n=n_agr, random_state=RANDOM_SEED)
+        ]).sample(frac=1, random_state=RANDOM_SEED)
+
+        results = []
+        for _, row in tqdm(sampled.iterrows(), total=len(sampled), desc="GPT-4o Evaluation"):
+            label, rationale, success = self.call_llm(row['extractive_summary'])
+            results.append({
+                "ticker": row['ticker'],
+                "date": row['date'],
+                "summary_label": row['summary_label'],
+                "baseline_label": row['baseline_label'],
+                "llm_ground_truth": label,
+                "llm_rationale": rationale,
+                "success": success
+            })
+
+        res_df = pd.DataFrame(results)
+        res_df.to_csv(OUTPUT_DIR / "05_ground_truth_eval.csv", index=False)
+        print(f"Success! Processed {len(res_df)} samples. Results in {OUTPUT_DIR}")
+
+if __name__ == "__main__":
+    GroundTruthEvaluator().run()
