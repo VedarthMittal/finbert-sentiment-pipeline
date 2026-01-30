@@ -1,348 +1,122 @@
 # Overcoming the 512-Token FinBERT Limit in Earnings Call Analysis
 
-**Master's Research Project**  
-*Data Science & Artificial Intelligence*  
-*University of Amsterdam, 2026*
+**Applied AI Research Seminar (6414M0712Y)** 
 
 ---
 
-## The Problem: FinBERT's Information Gap
+## 1. Research Context: The Information Gap
 
-FinBERT, the leading financial sentiment analysis model, has a **hard 512-token limit**. Earnings call transcripts, however, average **~7,349 tokens**, creating a critical information gap:
+FinBERT, the industry-standard model for financial sentiment, is constrained by a **hard 512-token limit**. However, corporate earnings call transcripts average **~7,349 tokens**, creating a significant barrier for automated analysis.
 
-- **Naive truncation** cuts off 93% of content
-- **Q&A sections** (where executives reveal uncertainties) are systematically lost
-- **Sliding window approaches** work but are computationally expensive (7x slower)
 
-**Quantitative Evidence:**
-- Mean transcript: 7,349 tokens
-- FinBERT capacity: 512 tokens
-- Information loss: 6,837 tokens (93%)
-- Q&A captured in first 512 tokens: ~3% of transcripts
 
-This project investigates whether **budget-aware extractive summarization** can preserve sentiment signals while achieving 94% token compression.
+* **Truncation Bias**: Naive truncation (cutting at 512 tokens) discards approximately 93% of the document.
+* **Missing Q&A**: Crucial spontaneous dialogue (Q&A) typically occurs late in the call and is systematically lost in standard processing.
+* **The Goal**: This project utilizes **budget-aware extractive summarization** to compress transcripts by 94% while preserving categorical sentiment signals.
 
 ---
 
-## The Solution: Budget-Aware Extractive Summarization
+## 2. Methodology: Budget-Aware Summarization
 
 ### Algorithm Design
 
-A **hybrid TF-IDF + TextRank** ranking system with strategic budget allocation:
 
-1. **Token Budget**: 450 tokens total (62-token safety buffer)
-   - **150 tokens** → Prepared Remarks (scripted content)
-   - **300 tokens** → Q&A Section (spontaneous insights)
-
-2. **Sentence Ranking**:
-   - **TF-IDF**: Captures term importance (efficient, O(n log n))
-   - **TextRank**: Captures semantic centrality via PageRank (accurate, O(n²))
-   - **Keyword Boost**: 1.2x multiplier for financial terms (guidance, outlook, risk, margin, EBITDA)
-
-3. **Greedy Selection**: Highest-ranked sentences added until budget exhausted
-
-### Why Prioritize Q&A Over Prepared Remarks?
-
-Research shows Q&A sections contain **"spontaneous, fuzzy knowledge"** where:
-- Analysts ask challenging questions
-- Executives reveal uncertainties not in prepared statements
-- Forward-looking risks are discussed candidly
-
-Our 300/150 token allocation reflects this empirical insight.
+We implement a hybrid ranking and selection system:
+* **Sentence Ranking**: A combination of **TF-IDF** (statistical importance) and **TextRank** (semantic centrality) with a 1.2x **Keyword Boost** for financial indicators (*e.g., guidance, outlook, margin, EBITDA*).
+* **Segmented Budgeting**: 
+    * **150 Tokens** allocated to Prepared Remarks (scripted content).
+    * **300 Tokens** allocated to Q&A (prioritizing spontaneous management insights).
+* **Total Budget**: 450 Tokens (ensuring a safety buffer for the 512-token FinBERT sub-word tokenizer).
 
 ---
 
-## The Validation: GPT-4o as Proxy Expert
+## 3. Requirements
 
-### Triangulation Framework
+### Hardware Requirements
+* **GPU**: NVIDIA GPU (8GB+ VRAM) recommended for Stage 4 (FinBERT Inference). Compatible with CUDA and Apple Silicon (MPS).
+* **RAM**: 16GB minimum (32GB recommended for large-scale data processing).
+* **Storage**: 5GB+ for model checkpoints and intermediate data artifacts.
 
-Three sentiment sources for rigorous evaluation:
+### Software Prerequisites
+* **Python**: 3.10 – 3.13
+* **OpenAI API Key**: Required for Stage 5 (Ground Truth Generation).
 
-1. **Experimental**: Sentiment on extractive summaries (430 tokens avg)
-2. **Baseline**: Sentiment on full transcripts via sliding window (7,349 tokens avg)
-3. **Ground Truth**: GPT-4o annotations as proxy for human experts
-
-### Evaluation Metrics
-
-- **Pearson Correlation** (r): Summary vs. Baseline sentiment agreement
-- **F1-Score**: Summary vs. Ground Truth, Baseline vs. Ground Truth
-- **Label Agreement**: % transcripts with same sentiment class
-- **Confusion Matrices**: Visual evidence of signal preservation
-- **Speedup Analysis**: Computational efficiency gains
-
-### Acknowledged Limitations
-
-**GPT-4o is NOT infallible.** This approach acknowledges:
-- Potential hallucinations in LLM annotations
-- Domain knowledge gaps in financial jargon
-- Human expert validation still recommended for production
-
-However, GPT-4o provides:
-- **Consistency**: Same prompt for all samples
-- **Reproducibility**: Documented in code
-- **Auditability**: Rationales stored for review
-- **Scalability**: 100 samples in ~5 minutes vs. weeks for CFA analysts
+### Python Dependencies
+Install the core stack via the provided command in the Setup section:
+* `transformers` & `torch`: Deep learning and FinBERT execution.
+* `scikit-learn`: TF-IDF vectorization and evaluation metrics.
+* `networkx`: Graph-based TextRank implementation.
+* `nltk`: Sentence tokenization.
+* `openai` & `python-dotenv`: LLM proxy evaluation and key management.
+* `pandas`, `numpy`, `matplotlib`, `seaborn`: Data manipulation and visualization.
 
 ---
 
-## Dataset
-
-- **Source**: 18,755 Motley Fool earnings call transcripts
-- **Preprocessing**: Regex-based Q&A segmentation, NLTK sentence tokenization
-- **Token Statistics**: Mean = 7,349, Median = 6,824, Max = 28,541
-- **Sectors**: Diversified (tech, finance, healthcare, retail, energy)
-
-**Note**: Raw data is **excluded from this repository** due to size constraints. Place `motley-fool-data.pkl` in the `data/` directory after cloning.
-
----
-
-## Results Summary
-
-### Token Compression
-
-| Metric | Value |
-|--------|-------|
-| Original tokens/transcript | 7,349 (avg) |
-| Summary tokens/transcript | 430 (avg) |
-| Compression ratio | 94% |
-| FinBERT compliance | 100% (all summaries ≤ 512) |
-
-### Sentiment Preservation
-
-| Comparison | Pearson r | Label Agreement | F1-Score |
-|------------|-----------|-----------------|----------|
-| Summary vs Baseline | [Your r value] | [Your %] | - |
-| Summary vs GPT-4o | - | [Your %] | [Your F1] |
-| Baseline vs GPT-4o | - | [Your %] | [Your F1] |
-
-### Computational Efficiency
-
-| Method | Throughput | Speedup |
-|--------|------------|---------|
-| Summary Inference | ~X tx/sec | **Xx faster** |
-| Baseline Inference | ~Y tx/sec | baseline |
-
----
-
-## Installation & Usage
-
-### Prerequisites
-
-- Python 3.13+
-- CUDA-capable GPU (optional but recommended for Stage 4)
-- OpenAI API key (for Stage 5 ground truth generation)
-
-### Setup
+## 4. Installation & Setup
 
 ```bash
-# Clone repository
-git clone https://github.com/[your-username]/finbert-sentiment-pipeline.git
+# Clone the repository
+git clone [https://github.com/](https://github.com/VedarthMittal/finbert-summarization-pipeline.git
 cd finbert-sentiment-pipeline
 
 # Create virtual environment
 python -m venv venv
-
-# Activate environment
-# On Windows:
-venv\Scripts\activate
-# On macOS/Linux:
-source venv/bin/activate
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
-pip install -r requirements.txt
+pip install pandas numpy scikit-learn transformers torch networkx tqdm matplotlib seaborn nltk python-dotenv openai
 
-# Download NLTK data
+# Download NLTK resources
 python -c "import nltk; nltk.download('punkt')"
-```
 
-### Data Preparation
+# Configure Environment
+echo "OPENAI_API_KEY=your_key_here" > .env
 
-Place your earnings call transcripts in `data/motley-fool-data.pkl`. Expected schema:
+## 5. Pipeline Execution
 
-```python
-{
-    'ticker': str,        # Stock symbol
-    'date': str/datetime, # Earnings call date
-    'transcript': str     # Full transcript text
-}
-```
+Execute the stages in sequential order to maintain data integrity:
 
-### Running the Pipeline
-
-Execute stages sequentially:
-
-```bash
-# Stage 1: Information Gap Analysis
-python eda_information_gap.py
-
-# Stage 2: Sentence Tokenization
-python preprocessing_stage2.py
-
-# Stage 3: Extractive Summarization
-python stage3_budget_aware_summarization.py
-
-# Stage 4: FinBERT Sentiment Inference
-python stage4_gpu_optimized.py
-
-# Stage 5: Ground Truth Generation (requires OpenAI API key)
-# Set environment variable first:
-export OPENAI_API_KEY="sk-..."  # On Windows: set OPENAI_API_KEY=sk-...
-python stage5_ground_truth_llm.py
-
-# Stage 6: Statistical Evaluation
-python stage6_evaluation_metrics.py
-```
-
-### Expected Outputs
-
-```
-outputs/
-├── 01_eda_outputs/
-│   ├── token_statistics.csv
-│   └── qa_segmentation_accuracy.pkl
-├── preprocessing_outputs/
-│   ├── transcripts_with_sentences.pkl
-│   └── tokenization_stats.csv
-├── stage3_output/
-│   ├── extractive_summaries.pkl
-│   └── summarization_statistics.csv
-├── stage4_output/
-│   ├── final_sentiment_results.pkl
-│   └── sentiment_comparison_report.txt
-├── 05_ground_truth_eval.pkl
-├── 05_ground_truth_eval.csv
-└── 06_evaluation_plots/
-    ├── confusion_matrix_summary.png
-    ├── confusion_matrix_baseline.png
-    └── f1_comparison.png
-```
+| Stage | Script | Description |
+| :--- | :--- | :--- |
+| **1** | `eda_information_gap.py` | Quantifies the "Information Gap" and token loss statistics. |
+| **2** | `preprocessing_stage2.py` | Performs NLTK sentence tokenization and regex cleaning. |
+| **3** | `stage3_budget_aware_summarization.py` | Runs the TF-IDF/TextRank budget-aware summarizer. |
+| **4** | `stage4_gpu_optimized.py` | Performs batch FinBERT inference (Summary vs. Baseline). |
+| **5** | `stage5_ground_truth_llm.py` | Generates GPT-4o proxy-expert labels with rationales. |
+| **6** | `stage6_evaluation_metrics.py` | Generates final F1-scores, Confusion Matrices, and charts. |
 
 ---
 
-## Project Structure
+## 6. Evaluation Framework
 
-```
-.
-├── data/                              # Raw transcripts (gitignored)
-│   └── motley-fool-data.pkl          # User must provide
-├── outputs/                           # Pipeline outputs (gitignored)
-├── eda_information_gap.py            # Stage 1: Token gap analysis
-├── preprocessing_stage2.py           # Stage 2: NLTK sentence tokenization
-├── stage3_budget_aware_summarization.py  # Stage 3: TF-IDF + TextRank
-├── stage4_gpu_optimized.py           # Stage 4: FinBERT batch inference
-├── stage5_ground_truth_llm.py        # Stage 5: GPT-4o proxy annotations
-├── stage6_evaluation_metrics.py      # Stage 6: F1-score evaluation
-├── requirements.txt                   # Python dependencies
-├── .gitignore                        # Excludes data and outputs
-└── README.md                         # This file
-```
+We validate the pipeline using a **Triangulation Approach**:
+
+1. **Baseline**: Full-text sentiment via a sliding-window average (7,000+ tokens).
+2. **Experimental**: Sentiment on our condensed 450-token extractive summary.
+3. **Ground Truth**: Expert-level annotations from GPT-4o on stratified model-disagreement cases.
+
+
 
 ---
 
-## Technical Stack
+## 7. Results Summary
 
-| Component | Technology |
-|-----------|-----------|
-| Language | Python 3.13+ |
-| NLP | NLTK, Transformers (FinBERT) |
-| ML | scikit-learn, NetworkX |
-| Deep Learning | PyTorch (GPU acceleration) |
-| LLM | OpenAI GPT-4o |
-| Visualization | Matplotlib, Seaborn |
+* **Compression Ratio**: ~94.2% reduction in input size.
+* **Compliance**: 100% compliance with FinBERT 512-token constraints.
+* **Speedup**: ~10x reduction in inference time compared to sliding-window baselines.
+
+
 
 ---
 
-## Key Design Decisions
+## 8. Citation & License
 
-### 1. No Lemmatization in Preprocessing
-
-**Decision**: Preserve original tokens without stemming/lemmatization.
-
-**Rationale**: Financial entities like "EBITDA," "guidance," and company names are critical sentiment signals. Lemmatization risks destroying these domain-specific terms.
-
-### 2. Regex-Based Q&A Segmentation
-
-**Decision**: Use pattern matching on "Question-and-Answer" headers.
-
-**Limitation**: Assumes consistent transcript formatting. Non-standard transcripts may mis-segment.
-
-**Future Work**: Train a transformer-based segmentation classifier.
-
-### 3. Greedy vs. Optimal Sentence Selection
-
-**Decision**: Greedy algorithm (add highest-ranked sentences until budget exhausted).
-
-**Rationale**: Proven optimal for knapsack-like token budgeting. No combination of lower-ranked sentences can improve quality while respecting budget.
-
-### 4. GPT-4o Temperature = 0
-
-**Decision**: Deterministic LLM sampling for reproducibility.
-
-**Rationale**: Ground truth labels must be consistent across multiple runs for scientific validity.
-
----
-
-## Limitations & Future Work
-
-### Current Limitations
-
-1. **LLM Hallucinations**: GPT-4o annotations may contain errors. Rationales are stored for audit, but human expert validation is still gold standard.
-
-2. **Domain Specificity**: Evaluated only on Motley Fool transcripts. Cross-validation on Bloomberg/Reuters transcripts would strengthen claims.
-
-3. **Temporal Drift**: Financial language evolves. Models trained on 2020-2023 data may degrade on 2026+ transcripts.
-
-4. **Q&A Segmentation Heuristics**: Regex-based approach assumes header consistency.
-
-### Future Directions
-
-- **Human Expert Validation**: CFA-certified analyst annotations (n=500 sample)
-- **Abstractive Summarization**: Compare BART/T5 vs. extractive approaches
-- **Multi-Modal Analysis**: Incorporate tone-of-voice and pause frequency from earnings call audio
-- **Real-Time Deployment**: API for live investor sentiment dashboards
-
----
-
-## Citation
-
-If you use this code or methodology in your research, please cite:
+This work is submitted as academic research for the Master's in Data Science and Business Amalytics at the **University of Amsterdam**.
 
 ```bibtex
 @mastersthesis{finbert_summarization_2026,
-  author = {[Your Name]},
-  title = {Overcoming the 512-Token FinBERT Limit in Earnings Call Analysis: 
-           A Budget-Aware Extractive Summarization Approach},
+  author = {[Vedarth Mittal]},
+  title = {Overcoming the 512-Token FinBERT Limit in Earnings Call Analysis},
   school = {University of Amsterdam},
-  year = {2026},
-  type = {Master's Thesis},
-  department = {Data Science and Artificial Intelligence}
+  year = {2026}
 }
-```
-
----
-
-## License
-
-This project is submitted as academic work for a Master's degree at the University of Amsterdam. Code is provided for educational and research purposes.
-
-**Data Source**: Motley Fool earnings call transcripts are proprietary. Users must obtain their own data.
-
----
-
-## Acknowledgments
-
-- **FinBERT Model**: Huang et al. (2020) - `yiyanghkust/finbert-tone`
-- **Theoretical Framework**: Venneman (2025) - Q&A prioritization methodology
-- **LLM Infrastructure**: OpenAI GPT-4o for proxy expert annotations
-
----
-
-## Contact & Contributions
-
-For questions, suggestions, or collaboration:
-
-- **GitHub Issues**: [Open an issue](https://github.com/[your-username]/finbert-sentiment-pipeline/issues)
-- **Email**: [your.email@student.uva.nl]
-- **LinkedIn**: [Your LinkedIn Profile]
-
-Pull requests welcome! Please ensure all tests pass and code follows PEP 8 style guidelines.
