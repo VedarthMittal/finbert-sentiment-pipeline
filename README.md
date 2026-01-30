@@ -105,7 +105,7 @@ We validate the pipeline using a **Triangulation Approach**:
 
 * **Compression Ratio**: ~94.2% reduction in input size.
 * **Compliance**: 100% compliance with FinBERT 512-token constraints.
-* **Speedup**: ~10x reduction in inference time compared to sliding-window baselines.
+* **Speedup**: ~25.6x reduction in inference time compared to sliding-window baselines.
 
 
 
