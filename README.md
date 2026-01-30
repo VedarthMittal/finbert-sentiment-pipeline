@@ -38,7 +38,7 @@ We implement a hybrid ranking and selection system:
 * **Storage**: 5GB+ for model checkpoints and intermediate data artifacts.
 
 ### Software Prerequisites
-* **Python**: 3.10 – 3.13
+* **Python**: 3.13
 * **OpenAI API Key**: Required for Stage 5 (Ground Truth Generation).
 
 ### Python Dependencies
