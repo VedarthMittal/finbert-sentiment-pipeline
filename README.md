@@ -57,8 +57,8 @@ cd finbert-summarization-pipeline
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# Install dependencies
-pip install pandas numpy scikit-learn transformers torch networkx tqdm matplotlib seaborn nltk python-dotenv openai
+# Install dependencies from requirements.txt
+pip install -r requirements.txt
 
 # Download NLTK resources
 python -c "import nltk; nltk.download('punkt')"
