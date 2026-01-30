@@ -43,21 +43,15 @@ We implement a hybrid ranking and selection system:
 
 ### Python Dependencies
 Install the core stack via the provided command in the Setup section:
-* `transformers` & `torch`: Deep learning and FinBERT execution.
-* `scikit-learn`: TF-IDF vectorization and evaluation metrics.
-* `networkx`: Graph-based TextRank implementation.
-* `nltk`: Sentence tokenization.
-* `openai` & `python-dotenv`: LLM proxy evaluation and key management.
-* `pandas`, `numpy`, `matplotlib`, `seaborn`: Data manipulation and visualization.
-
+* `transformers`, `torch`, `scikit-learn`, `networkx`, `nltk`, `openai`, `python-dotenv`, `pandas`, `numpy`, `matplotlib`, `seaborn`
 ---
 
 ## 4. Installation & Setup
 
 ```bash
 # Clone the repository
-git clone [https://github.com/](https://github.com/VedarthMittal/finbert-summarization-pipeline.git
-cd finbert-sentiment-pipeline
+git clone [https://github.com/VedarthMittal/finbert-summarization-pipeline.git](https://github.com/VedarthMittal/finbert-summarization-pipeline.git)
+cd finbert-summarization-pipeline
 
 # Create virtual environment
 python -m venv venv
@@ -122,3 +116,11 @@ This work is submitted as academic research for the Master's in Data Science and
   school = {University of Amsterdam},
   year = {2026}
 }
+```
+
+---
+## 9. Contact
+
+* **Research by**: Vedarth Mittal
+* **Email**: mittalvedarth@student.uva.nl
+* **GitHub**: VedarthMittal
