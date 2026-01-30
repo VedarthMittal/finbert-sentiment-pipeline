@@ -102,24 +102,8 @@ We validate the pipeline using a **Triangulation Approach**:
 * **Speedup**: ~25.6x reduction in inference time compared to sliding-window baselines.
 
 
-
 ---
-
-## 8. Citation & License
-
-This work is submitted as academic research for the Master's in Data Science and Business Amalytics at the **University of Amsterdam**.
-
-```bibtex
-@mastersthesis{finbert_summarization_2026,
-  author = {[Vedarth Mittal]},
-  title = {Overcoming the 512-Token FinBERT Limit in Earnings Call Analysis},
-  school = {University of Amsterdam},
-  year = {2026}
-}
-```
-
----
-## 9. Contact
+## 8. Contact
 
 * **Research by**: Vedarth Mittal
 * **Email**: mittalvedarth@student.uva.nl
