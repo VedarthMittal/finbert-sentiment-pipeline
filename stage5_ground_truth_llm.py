@@ -1,416 +1,165 @@
 """
-Stage 5: Ground Truth Generation via GPT-4o Zero-Shot Prompting.
-
-This LLM-based ground truth serves as a proxy for expert annotation. Rationales are 
-stored to audit for potential model hallucinations. This approach acknowledges that 
-GPT-4o is not infallible but provides a high-quality benchmark for evaluating 
-sentiment analysis accuracy when human expert annotation is unavailable.
-
-Triangulation Framework:
-1. Baseline: Full transcript via sliding window sentiment
-2. Experimental: Extractive summary sentiment
-3. Ground Truth: LLM-based proxy expert sentiment (this script)
-
-This enables rigorous Stage 5 evaluation without human annotation costs.
+Stage 5: Ground Truth Generation via LLM
+Generates a deterministic stratified sample for expert-proxy validation.
+Prioritizes model disagreement cases (50/50 split) to maximize 
+methodological divergence testing.
 """
 
 import os
-import pickle
-import pandas as pd
-import numpy as np
-from pathlib import Path
-from typing import Dict, List, Tuple, Optional
-from dataclasses import dataclass
 import json
 import time
 import sys
+import pandas as pd
+import numpy as np
+from pathlib import Path
+from tqdm import tqdm
 from dotenv import load_dotenv
-from openai import OpenAI, APIError, APIConnectionError, RateLimitError
+from openai import OpenAI, RateLimitError, APIConnectionError, APIError
 
-# Load environment variables from .env file
+# Load Environment Variables
 load_dotenv()
 
-# Configure paths
-WORKSPACE_ROOT = Path.cwd()
-OUTPUTS_DIR = WORKSPACE_ROOT / "outputs"
+# --- CONFIGURATION ---
+INPUT_S3 = Path("stage3_output/extractive_summaries.pkl")
+INPUT_S4 = Path("stage4_output/final_sentiment_results.pkl")
+OUTPUT_DIR = Path("stage5_output")
 
-# Get API key from environment variable
-API_KEY = os.getenv("OPENAI_API_KEY")
+# Use environment variable or fallback to hardcoded 
+API_KEY = os.getenv("OPENAI_API_KEY") or 'your-key-here'
 
-if not API_KEY:
-    print("❌ Error: OPENAI_API_KEY not found!")
-    print("\nPlease set your OpenAI API key using one of these methods:")
-    print("  1. Create a .env file with: OPENAI_API_KEY=your-key-here")
-    print("  2. Set environment variable: export OPENAI_API_KEY=your-key-here")
-    print("  3. Windows PowerShell: $env:OPENAI_API_KEY='your-key-here'")
+RANDOM_SEED = 42
+SAMPLE_SIZE = 100
+MAX_RETRIES = 3
+
+if not API_KEY or API_KEY == 'your-key-here':
+    print("❌ Error: OPENAI_API_KEY not found. Please set it in your .env file.")
     sys.exit(1)
 
-
-@dataclass
-class GroundTruthResult:
-    """Result from LLM ground truth annotation."""
-    ticker: str
-    date: str
-    summary_label: str
-    baseline_label: str
-    llm_ground_truth: str
-    llm_rationale: str
-    api_call_time: float
-    success: bool
-    error_message: Optional[str] = None
-
-
 class GroundTruthEvaluator:
-    """Generates ground truth labels using GPT-4o."""
-    
     def __init__(self):
         self.client = OpenAI(api_key=API_KEY)
-        self.results: List[GroundTruthResult] = []
         self.model = "gpt-4o"
-        
         self.system_prompt = (
             "You are a Senior Equity Analyst. Analyze the following earnings call "
             "transcript summary and provide a sentiment label: POSITIVE, NEGATIVE, or NEUTRAL. "
-            "A POSITIVE label means the company exceeds expectations or provides strong guidance. "
-            "NEGATIVE means headwinds, risks, or missed targets. NEUTRAL is for standard "
-            "procedural updates with no clear direction. "
-            "Return your response in JSON format with two fields: 'label' (POSITIVE/NEGATIVE/NEUTRAL) "
-            "and 'rationale' (your reasoning)."
+            "Return JSON: {'label': 'STR', 'rationale': 'STR'}"
         )
-    
-    def load_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Load Stage 4 and Stage 3 outputs."""
-        print("\n[LOAD] Loading Stage 4 and Stage 3 data...")
+
+    def load_and_align_data(self) -> pd.DataFrame:
+        """Merge pipeline inputs and fix unhashable list issues."""
+        if not (INPUT_S3.exists() and INPUT_S4.exists()):
+            # Detailed error message to help you debug paths
+            raise FileNotFoundError(
+                f"Required files not found!\n"
+                f"Expected Stage 3: {INPUT_S3.absolute()}\n"
+                f"Expected Stage 4: {INPUT_S4.absolute()}"
+            )
+            
+        s3 = pd.read_pickle(INPUT_S3)
+        s4 = pd.read_pickle(INPUT_S4)
         
-        # Load Stage 4 final inference results
-        stage4_file = OUTPUTS_DIR / "04_final_inference.pkl"
-        if not stage4_file.exists():
-            raise FileNotFoundError(f"Missing: {stage4_file}")
+        # FIX: Ensure date is a string to prevent matching errors
+        s3['date'] = s3['date'].astype(str)
+        s4['date'] = s4['date'].astype(str)
         
-        stage4_data = pd.read_pickle(stage4_file)
-        print(f"  Stage 4 columns: {stage4_data.columns.tolist()}")
-        print(f"  Stage 4 shape: {stage4_data.shape}")
-        
-        # Load Stage 3 summaries
-        stage3_file = OUTPUTS_DIR / "03_summaries.pkl"
-        if not stage3_file.exists():
-            raise FileNotFoundError(f"Missing: {stage3_file}")
-        
-        stage3_data = pd.read_pickle(stage3_file)
-        print(f"  Stage 3 columns: {stage3_data.columns.tolist()}")
-        print(f"  Stage 3 shape: {stage3_data.shape}")
-        
-        print(f"  ✓ Loaded {len(stage4_data)} transcripts from Stage 4")
-        print(f"  ✓ Loaded {len(stage3_data)} summaries from Stage 3")
-        
-        return stage4_data, stage3_data
-    
-    def stratified_sample(self, stage4_df: pd.DataFrame, sample_size: int = 100) -> List[int]:
-        """
-        Perform stratified sampling with 50% disagreement cases.
-        
-        Returns:
-            List of indices to sample
-        """
-        print(f"\n[SAMPLE] Performing stratified sampling ({sample_size} transcripts)...")
-        
-        # Identify disagreement cases
-        disagreement_mask = stage4_df["summary_label"] != stage4_df["baseline_label"]
-        disagreement_indices = stage4_df[disagreement_mask].index.tolist()
-        agreement_indices = stage4_df[~disagreement_mask].index.tolist()
-        
-        print(f"  • Disagreement cases: {len(disagreement_indices)}")
-        print(f"  • Agreement cases: {len(agreement_indices)}")
-        
-        # Sample with 50/50 split
-        n_disagreement = min(sample_size // 2, len(disagreement_indices))
-        n_agreement = min(sample_size - n_disagreement, len(agreement_indices))
-        
-        sampled_disagreement = np.random.choice(
-            disagreement_indices, 
-            size=n_disagreement,
-            replace=False
+        # FIX: Only select 'ticker' and 'date' to merge on. 
+        # This avoids trying to merge on columns containing lists (which are unhashable).
+        return pd.merge(
+            s4[['ticker', 'date', 'summary_label', 'baseline_label']], 
+            s3[['ticker', 'date', 'extractive_summary']], 
+            on=['ticker', 'date'],
+            how='inner'
         )
-        sampled_agreement = np.random.choice(
-            agreement_indices,
-            size=n_agreement,
-            replace=False
-        )
+
+    def get_stratified_sample(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Deterministic sampling: 50% agreement cases, 50% disagreement cases."""
+        np.random.seed(RANDOM_SEED)
         
-        sampled_indices = list(sampled_disagreement) + list(sampled_agreement)
-        np.random.shuffle(sampled_indices)
+        # Identify Disagreement Cases (Where models diverge)
+        disagree = df[df["summary_label"] != df["baseline_label"]]
+        agree = df[df["summary_label"] == df["baseline_label"]]
         
-        print(f"  ✓ Sampled {len(sampled_indices)} transcripts")
-        print(f"    - Disagreement: {len(sampled_disagreement)}")
-        print(f"    - Agreement: {len(sampled_agreement)}")
+        n_dis = min(SAMPLE_SIZE // 2, len(disagree))
+        n_agr = SAMPLE_SIZE - n_dis
         
-        return sampled_indices
-    
-    def call_llm(self, summary_text: str, max_retries: int = 3) -> Tuple[str, str, float, bool]:
-        """
-        Call GPT-4o API with error handling and retry logic.
+        # Perform stratified selection
+        idx_dis = np.random.choice(disagree.index, size=n_dis, replace=False)
+        idx_agr = np.random.choice(agree.index, size=n_agr, replace=False)
         
-        Returns:
-            (label, rationale, api_time, success)
-        """
-        start_time = time.time()
+        sampled = df.loc[list(idx_dis) + list(idx_agr)].copy()
+        print(f"Sampling Strategy: {n_dis} disagreements, {n_agr} agreements.")
         
-        user_prompt = f"Analyze this earnings call summary:\n\n{summary_text}"
+        return sampled.sample(frac=1, random_state=RANDOM_SEED)
+
+    def call_llm_with_retry(self, text: str):
+        """Call GPT-4o with differentiated backoff and strict label validation."""
+        clean_text = text[:6000] # Safe context window truncation
         
-        for attempt in range(max_retries):
+        for attempt in range(MAX_RETRIES):
             try:
                 response = self.client.chat.completions.create(
                     model=self.model,
-                    messages=[
-                        {"role": "system", "content": self.system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
+                    messages=[{"role": "system", "content": self.system_prompt},
+                              {"role": "user", "content": f"Analyze: {clean_text}"}],
                     response_format={"type": "json_object"},
-                    temperature=0,
-                    max_tokens=200,
-                    timeout=30.0
+                    temperature=0
                 )
+                res = json.loads(response.choices[0].message.content)
                 
-                api_time = time.time() - start_time
+                label = res.get('label', 'NEUTRAL').upper()
+                if label not in ["POSITIVE", "NEGATIVE", "NEUTRAL"]:
+                    label = "NEUTRAL"
                 
-                # Parse JSON response
-                try:
-                    result = json.loads(response.choices[0].message.content)
-                    label = result.get("label", "NEUTRAL").upper()
-                    rationale = result.get("rationale", "No rationale provided")
-                    
-                    # Validate label
-                    if label not in ["POSITIVE", "NEGATIVE", "NEUTRAL"]:
-                        label = "NEUTRAL"
-                    
-                    return label, rationale, api_time, True
-                
-                except json.JSONDecodeError as e:
-                    print(f"  ⚠ JSON decode error (attempt {attempt+1}): {e}")
-                    if attempt < max_retries - 1:
-                        time.sleep(2)
-                        continue
-                    return "NEUTRAL", "JSON parse error", api_time, False
+                return label, res.get('rationale', ''), True, None
             
-            except RateLimitError as e:
-                wait_time = 60 * (attempt + 1)
-                print(f"  ⚠ Rate limit (attempt {attempt+1}), waiting {wait_time}s...")
-                time.sleep(wait_time)
-                if attempt == max_retries - 1:
-                    return "NEUTRAL", f"Rate limit exceeded after {max_retries} retries", time.time() - start_time, False
-            
-            except APIConnectionError as e:
-                print(f"  ⚠ Connection error (attempt {attempt+1}): {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(5)
-                    continue
-                return "NEUTRAL", f"API connection failed: {str(e)[:100]}", time.time() - start_time, False
-            
-            except APIError as e:
-                print(f"  ⚠ API error (attempt {attempt+1}): {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(3)
-                    continue
-                return "NEUTRAL", f"API error: {str(e)[:100]}", time.time() - start_time, False
+            except RateLimitError:
+                wait = 60 * (attempt + 1)
+                time.sleep(wait)
+            except (APIConnectionError, APIError) as e:
+                time.sleep(5 * (attempt + 1))
+                if attempt == MAX_RETRIES - 1: return "NEUTRAL", str(e), False, str(e)
+            except Exception as e:
+                return "NEUTRAL", str(e), False, str(e)
         
-        api_time = time.time() - start_time
-        return "NEUTRAL", "Max retries exceeded", api_time, False
-    
-    def process_samples(
-        self, 
-        stage4_df: pd.DataFrame, 
-        stage3_df: pd.DataFrame,
-        sampled_indices: List[int]
-    ) -> pd.DataFrame:
-        """Process sampled transcripts through LLM."""
-        print(f"\n[LLM] Processing {len(sampled_indices)} samples through GPT-4o...")
-        print(f"     (Estimating ~{len(sampled_indices) * 3} seconds with rate limits)\n")
-        
-        results = []
-        total_api_time = 0
-        failed_count = 0
-        
-        for i, idx in enumerate(sampled_indices, 1):
-            # Get metadata from Stage 4
-            row_stage4 = stage4_df.iloc[idx]
-            ticker = row_stage4.get("ticker", f"TICKER_{idx}")
-            date = row_stage4.get("date", f"DATE_{idx}")
-            summary_label = row_stage4.get("summary_label", "UNKNOWN")
-            baseline_label = row_stage4.get("baseline_label", "UNKNOWN")
-            
-            # Get summary text from Stage 3
-            row_stage3 = stage3_df.iloc[idx]
-            summary_text = row_stage3.get("extractive_summary", "")
-            
-            if not summary_text or not isinstance(summary_text, str):
-                print(f"  [{i:3d}/{len(sampled_indices)}] {ticker} - ⚠ SKIP (no summary)")
-                failed_count += 1
-                continue
-            
-            # Truncate if too long (to avoid token limits)
-            if len(summary_text) > 1500:
-                summary_text = summary_text[:1500] + "..."
-            
-            # Call LLM
-            label, rationale, api_time, success = self.call_llm(summary_text)
-            total_api_time += api_time
-            
-            # Status indicator
-            status = "[OK]" if success else "[WARN]"
-            
-            print(f"  [{i:3d}/{len(sampled_indices)}] {ticker} ({str(date)[:10]}) - {status} {label} ({api_time:.1f}s)")
-            
-            if not success:
-                failed_count += 1
-            
-            # Store result
-            result = GroundTruthResult(
-                ticker=ticker,
-                date=str(date),
-                summary_label=summary_label,
-                baseline_label=baseline_label,
-                llm_ground_truth=label,
-                llm_rationale=rationale,
-                api_call_time=api_time,
-                success=success,
-                error_message=None if success else rationale
-            )
-            results.append(result)
-        
-        print(f"\n  ✓ Processed {len(results)} samples")
-        print(f"  • Successful: {len(results) - failed_count}")
-        print(f"  • Failed: {failed_count}")
-        print(f"  • Total API time: {total_api_time:.1f}s ({total_api_time/60:.1f}m)")
-        
-        # Convert to DataFrame
-        results_df = pd.DataFrame([
-            {
-                "ticker": r.ticker,
-                "date": r.date,
-                "summary_label": r.summary_label,
-                "baseline_label": r.baseline_label,
-                "llm_ground_truth": r.llm_ground_truth,
-                "llm_rationale": r.llm_rationale,
-            }
-            for r in results
-        ])
-        
-        return results_df
-    
-    def save_results(self, results_df: pd.DataFrame) -> None:
-        """Save results to pickle and CSV."""
-        print("\n[SAVE] Saving ground truth results...")
-        
-        # Pickle
-        pkl_file = OUTPUTS_DIR / "05_ground_truth_eval.pkl"
-        results_df.to_pickle(pkl_file)
-        print(f"  ✓ Saved: {pkl_file.name}")
-        
-        # CSV for readability
-        csv_file = OUTPUTS_DIR / "05_ground_truth_eval.csv"
-        results_df.to_csv(csv_file, index=False)
-        print(f"  ✓ Saved: {csv_file.name}")
-    
-    def generate_report(self, results_df: pd.DataFrame) -> None:
-        """Generate a summary report."""
-        print("\n" + "="*70)
-        print("GROUND TRUTH EVALUATION REPORT")
-        print("="*70)
-        
-        # Label distribution
-        print("\n[DISTRIBUTION] LLM Ground Truth Labels:")
-        label_dist = results_df["llm_ground_truth"].value_counts()
-        for label, count in label_dist.items():
-            pct = 100 * count / len(results_df)
-            print(f"  • {label}: {count} ({pct:.1f}%)")
-        
-        # Agreement metrics
-        print("\n[AGREEMENT] Comparison with Stage 4 Models:")
-        
-        summary_agree = (results_df["summary_label"] == results_df["llm_ground_truth"]).sum()
-        baseline_agree = (results_df["baseline_label"] == results_df["llm_ground_truth"]).sum()
-        both_agree = (
-            (results_df["summary_label"] == results_df["llm_ground_truth"]) &
-            (results_df["baseline_label"] == results_df["llm_ground_truth"])
-        ).sum()
-        
-        print(f"  • Summary agrees with LLM: {summary_agree}/{len(results_df)} ({100*summary_agree/len(results_df):.1f}%)")
-        print(f"  • Baseline agrees with LLM: {baseline_agree}/{len(results_df)} ({100*baseline_agree/len(results_df):.1f}%)")
-        print(f"  • Both agree with LLM: {both_agree}/{len(results_df)} ({100*both_agree/len(results_df):.1f}%)")
-        
-        # Preview first 3
-        print("\n[PREVIEW] First 3 Samples with Rationales:")
-        print("-" * 70)
-        for i, (idx, row) in enumerate(results_df.head(3).iterrows(), 1):
-            print(f"\n{i}. {row['ticker']} ({row['date'][:10]})")
-            print(f"   Summary Label:    {row['summary_label']}")
-            print(f"   Baseline Label:   {row['baseline_label']}")
-            print(f"   LLM Ground Truth: {row['llm_ground_truth']}")
-            print(f"   Rationale: {row['llm_rationale'][:200]}...")
-        
-        print("\n" + "="*70)
-        print("LIMITATIONS & CAVEATS:")
-        print("="*70)
-        print("""
-This ground truth is generated by GPT-4o and serves as a PROXY for human expert 
-annotation. It is NOT infallible and may contain hallucinations, especially in:
+        return "NEUTRAL", "Max retries exceeded", False, "Timeout"
 
-1. Ambiguous earnings calls with mixed signals
-2. Technical financial jargon beyond training data
-3. Future guidance predictions (inherently uncertain)
-
-The stored rationales allow auditing for obvious hallucinations. For production
-use, human expert review is still recommended, especially for high-stakes decisions.
-
-However, as a cost-effective benchmark, this approach provides:
-- Consistency (same system prompt for all samples)
-- Reproducibility (documented prompts and model)
-- Quantitative evaluation metrics for thesis validation
-""")
-        print("="*70 + "\n")
-    
-    def run(self) -> bool:
-        """Execute the full ground truth generation pipeline."""
+    def run(self):
+        OUTPUT_DIR.mkdir(exist_ok=True)
+        print("--- Stage 5: Ground Truth Generation ---")
+        
         try:
-            print("\n" + "="*70)
-            print("STAGE 5: Ground Truth Generation via GPT-4o")
-            print("="*70)
-            print(f"Workspace: {WORKSPACE_ROOT}")
-            print(f"Model: {self.model}")
+            df = self.load_and_align_data()
+            sampled_df = self.get_stratified_sample(df)
             
-            # Load data
-            stage4_df, stage3_df = self.load_data()
+            results, success_count = [], 0
+            print(f"Generating Ground Truth for {len(sampled_df)} samples...")
+
+            for _, row in tqdm(sampled_df.iterrows(), total=len(sampled_df), desc="GPT-4o Evaluation"):
+                label, rationale, success, error_msg = self.call_llm_with_retry(row['extractive_summary'])
+                
+                if success: success_count += 1
+                
+                results.append({
+                    "ticker": row['ticker'],
+                    "date": row['date'],
+                    "summary_label": row['summary_label'],
+                    "baseline_label": row['baseline_label'],
+                    "llm_ground_truth": label,
+                    "llm_rationale": rationale,
+                    "success": success,
+                    "error_message": error_msg
+                })
+
+            res_df = pd.DataFrame(results)
+            res_df.to_csv(OUTPUT_DIR / "05_ground_truth_eval.csv", index=False)
+            res_df.to_pickle(OUTPUT_DIR / "05_ground_truth_eval.pkl")
+
+            print(f"\nPhase 5 Complete:")
+            print(f"  Processed: {len(res_df)} | Successful: {success_count} | Failed: {len(res_df)-success_count}")
+            print(f"  Outputs saved to {OUTPUT_DIR.absolute()}")
             
-            # Stratified sampling
-            sampled_indices = self.stratified_sample(stage4_df, sample_size=100)
-            
-            # Process through LLM
-            results_df = self.process_samples(stage4_df, stage3_df, sampled_indices)
-            
-            # Save results
-            self.save_results(results_df)
-            
-            # Generate report
-            self.generate_report(results_df)
-            
-            return True
-        
-        except FileNotFoundError as e:
-            print(f"\n[ERROR] {e}")
-            return False
         except Exception as e:
-            print(f"\n[ERROR] Unexpected error: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
-
-
-def main():
-    """Main entry point."""
-    evaluator = GroundTruthEvaluator()
-    success = evaluator.run()
-    sys.exit(0 if success else 1)
-
+            print(f"❌ Critical Error in Stage 5: {e}")
 
 if __name__ == "__main__":
-    main()
+    GroundTruthEvaluator().run()
